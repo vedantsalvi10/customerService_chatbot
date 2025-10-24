@@ -33,6 +33,17 @@ def get_ai_response(user_message: str) -> str:
         if len(user_message) > 1000:
             return "Your message is too long. Please shorten it."
 
+        # ✅ Build a running conversation context as plain strings
+        conversation_text = ""
+        for role, msg in st.session_state.chat_history:
+            if role == "👤 You":
+                conversation_text += f"User: {msg}\n"
+            else:
+                conversation_text += f"AI: {msg}\n"
+
+        # ✅ Add latest user message
+        conversation_text += f"User: {user_message}\nAI:"
+        
         # Configure system behavior
         config = types.GenerateContentConfig(
             system_instruction=(
@@ -47,7 +58,7 @@ def get_ai_response(user_message: str) -> str:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             config=config,
-            contents=user_message,
+            contents=conversation_text,
         )
 
         return response.text or "I'm not sure how to respond to that."

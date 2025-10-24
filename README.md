@@ -20,8 +20,6 @@ Built using **Python**, **Streamlit**, and **Google Gemini 2.5 Flash**, this cha
 ## 🖥️ Demo Screenshot (Optional)
 <img src="./screenshot1.png" width="500"/>
 
-### Chat Response
 <img src="./screenshot2.png" width="500"/>
 
-### Settings Modal
 <img src="./screenshot3.png" width="500"/>

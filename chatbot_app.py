@@ -6,14 +6,18 @@ import os
 import streamlit as st
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
+load_dotenv()
 
 # ====================================================
 # 🔐 Gemini Configuration
 # ====================================================
 
 # Set your Gemini API Key (recommended: from environment variable)
-API_KEY = os.getenv("GEMINI_API_KEY", "")
-
+API_KEY = os.getenv("GEMINI_API_KEY")
+if not API_KEY:
+    st.error(" GEMINI_API_KEY is missing. Please set it in environment variables.")
+    st.stop()
 client = genai.Client(api_key=API_KEY)
 
 # ====================================================
@@ -32,8 +36,8 @@ def get_ai_response(user_message: str) -> str:
         # Configure system behavior
         config = types.GenerateContentConfig(
             system_instruction=(
-                "You are a polite and friendly AI customer service chatbot for a fintech company. "
-                "You help users with questions about accounts, payments, and loans. "
+                "You are a polite and friendly AI customer service chatbot for a company that teaches you how to prepare food. "
+                "You help users with questions about recpies, accounts, cooking. "
                 "If unsure, politely suggest contacting human support by sending mail at xyx@gmail.com "
                 "Keep responses short and professional."
             )
@@ -56,7 +60,7 @@ def get_ai_response(user_message: str) -> str:
 # 💬 Streamlit Chat UI
 # ====================================================
 
-st.set_page_config(page_title="AI Customer Support Chatbot", page_icon="💬")
+st.set_page_config(page_title="customer service", page_icon="💬")
 st.markdown(
     """
     <style>
@@ -88,8 +92,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.title("💬 Fintech Customer Service Bot")
-st.caption(" Ask about your account, loans, or payments!")
+st.title("💬 Food Customer Service Bot")
+st.caption(" Ask about your cooking doubts, accounts, diet!")
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = [

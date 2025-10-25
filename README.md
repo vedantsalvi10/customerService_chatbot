@@ -20,7 +20,9 @@ Built using **Python**, **Streamlit**, and **Google Gemini 2.5 Flash**, this cha
 ## 🖥️ Demo Screenshot
 Chat Response
 <img src="./screenshot1.png" width="500"/>
+
 <img src="./screenshot2.png" width="500"/>
+
 <img src="./screenshot3.png" width="500"/>
 
 ### Toolcalling for food recepies and restaurants

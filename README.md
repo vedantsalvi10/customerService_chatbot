@@ -17,11 +17,16 @@ Built using **Python**, **Streamlit**, and **Google Gemini 2.5 Flash**, this cha
 
 ---
 
-## 🖥️ Demo Screenshot (Optional)
+## 🖥️ Demo Screenshot
+Chat Response
 <img src="./screenshot1.png" width="500"/>
-
-### Chat Response
 <img src="./screenshot2.png" width="500"/>
-
-### Settings Modal
 <img src="./screenshot3.png" width="500"/>
+
+### Toolcalling for food recepies and restaurants
+<img src="./screenshot4.png" width="500"/>
+
+<img src="./screenshot5.png" width="500"/>
+
+### Error handling
+<img src="./screenshot6.png" width="500"/>

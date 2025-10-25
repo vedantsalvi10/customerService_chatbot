@@ -1,131 +1,127 @@
 # ====================================================
-# 🤖 AI Customer Support Chatbot (Gemini + Streamlit)
+# 🤖 Food Customer Service Chatbot (OpenAI v1 SDK + Streamlit + Tool Calling)
 # ====================================================
 
 import os
 import streamlit as st
-from google import genai
-from google.genai import types
+import json
 from dotenv import load_dotenv
+from exa_py import Exa
+from openai import OpenAI  # New v1 SDK client
+
 load_dotenv()
 
 # ====================================================
-# 🔐 Gemini Configuration
+# 🔐 OpenAI & EXA Setup
 # ====================================================
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+EXA_API_KEY = os.getenv("EXA_API_KEY")
 
-# Set your Gemini API Key (recommended: from environment variable)
-API_KEY = os.getenv("GEMINI_API_KEY")
-if not API_KEY:
-    st.error(" GEMINI_API_KEY is missing. Please set it in environment variables.")
+if not OPENAI_API_KEY or not EXA_API_KEY:
+    st.error("Missing OPENAI_API_KEY or EXA_API_KEY in environment variables.")
     st.stop()
-client = genai.Client(api_key=API_KEY)
+
+# Initialize OpenAI client
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Initialize EXA client
+exa = Exa(api_key=EXA_API_KEY)
 
 # ====================================================
-# 🧠 Chatbot Logic
+# 🛠 Tool definition for function calling
 # ====================================================
+TOOLS = [
+    {
+        "name": "search_recipes",
+        "description": "Search the web for top recipes or food recommendations using Exa search.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query to perform"},
+                "num_results": {"type": "integer", "description": "Number of results to return", "default": 5},
+            },
+            "required": ["query"],
+        },
+    }
+]
 
-def get_ai_response(user_message: str) -> str:
-    """Generate AI response using Gemini model."""
-    try:
-        if not user_message.strip():
-            return "Please type a message so I can help you."
+# ====================================================
+# 🧠 EXA search function
+# ====================================================
+def search_recipes_tool(query, num_results = 5):
+    results = exa.search_and_contents(query, num_results=num_results,highlights=True)
+    return [{"title": r.title, "url": r.url, "content": r.highlights} for r in results.results]
 
-        if len(user_message) > 1000:
-            return "Your message is too long. Please shorten it."
+# ====================================================
+# 🧠 AI response with function calling
+# ====================================================
+def get_ai_response(user_message):
+    if not user_message.strip():
+        return "Please type a message so I can help you."
 
-        # ✅ Build a running conversation context as plain strings
-        conversation_text = ""
+    # Build conversation history
+    messages = [
+        {"role": "system", "content": "You are a polite AI helping users with recipes and cooking questions."}
+    ]
+    if "chat_history" in st.session_state:
         for role, msg in st.session_state.chat_history:
-            if role == "👤 You":
-                conversation_text += f"User: {msg}\n"
-            else:
-                conversation_text += f"AI: {msg}\n"
+            messages.append({"role": "user" if role=="👤 You" else "assistant", "content": msg})
+    messages.append({"role": "user", "content": user_message})
 
-        # ✅ Add latest user message
-        conversation_text += f"User: {user_message}\nAI:"
-        
-        # Configure system behavior
-        config = types.GenerateContentConfig(
-            system_instruction=(
-                "You are a polite and friendly AI customer service chatbot for a company that teaches you how to prepare food. "
-                "You help users with questions about recpies, accounts, cooking. "
-                "If unsure, politely suggest contacting human support by sending mail at xyx@gmail.com "
-                "Keep responses short and professional."
-            )
+    # Call OpenAI Chat API using new client
+    response = client.chat.completions.create(
+        model="gpt-4-0613",
+        messages=messages,
+        functions=TOOLS,
+        function_call="auto",
+        temperature=0.7,
+    )
+
+    message = response.choices[0].message
+
+    # Handle tool call
+    if message.function_call:
+        func_args = json.loads(message.function_call.arguments)
+        tool_results = search_recipes_tool(**func_args)
+        summary = "\n".join( [f"**{r['title']}**\n{r['content']}\n[{r['url']}]({r['url']})" for r in tool_results])
+        follow_up = client.chat.completions.create(
+            model="gpt-4-0613",
+            messages=[
+                {"role": "system", "content": "Summarize search results for the user politely."},
+                {"role": "user", "content": f"User asked: {user_message}\nHere are the results:\n{summary}"}
+            ],
+            temperature=0.7,
         )
+        return follow_up.choices[0].message.content
 
-        # Get response from Gemini
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            config=config,
-            contents=conversation_text,
-        )
-
-        return response.text or "I'm not sure how to respond to that."
-
-    except Exception as e:
-        print("Error:", e)
-        return "Sorry, something went wrong. Please try again later."
+    return message.content or "Sorry, I couldn't generate a response."
 
 # ====================================================
 # 💬 Streamlit Chat UI
 # ====================================================
-
-st.set_page_config(page_title="customer service", page_icon="💬")
-st.markdown(
-    """
-    <style>
-    body {
-        background-color: #F9FAFB;
-    }
-    .user-bubble {
-        background-color: #DCF8C6;
-        color: #000000;
-        padding: 10px 15px;
-        border-radius: 12px;
-        margin: 8px 0;
-        width: fit-content;
-        max-width: 80%;
-        margin-left: auto;
-    }
-    .bot-bubble {
-        background-color: #E6E6E6;
-        color: #000000;
-        padding: 10px 15px;
-        border-radius: 12px;
-        margin: 8px 0;
-        width: fit-content;
-        max-width: 80%;
-        margin-right: auto;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-st.title("💬 Food Customer Service Bot")
-st.caption(" Ask about your cooking doubts, accounts, diet!")
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [
-        ("🤖 Vedant", "Hello! 👋 How can I help you today?")
-    ]
-
-user_message = st.chat_input("Type your question here...")
-
+st.set_page_config(page_title="Customer Service", page_icon="💬") 
+st.markdown(""" 
+<style> body { background-color: #F9FAFB; } 
+.user-bubble { background-color: #DCF8C6; color: #000; padding:10px 15px; 
+border-radius:12px; margin:8px 0; max-width:80%; margin-left:auto; } 
+.bot-bubble { background-color: #E6E6E6; color:#000; padding:10px 15px; 
+border-radius:12px; margin:8px 0; max-width:80%; margin-right:auto; } 
+</style> 
+""", unsafe_allow_html=True) 
+st.title("💬 Food Customer Service Bot") 
+st.caption("Ask about cooking doubts, accounts, or diet!") 
+if "chat_history" not in st.session_state: 
+      st.session_state.chat_history = [("🤖 Vedant", "Hello! 👋 How can I help you today?")] 
+user_message = st.chat_input("Type your question here...") 
 if user_message:
-    ai_reply = get_ai_response(user_message)
-    st.session_state.chat_history.append(("👤 You", user_message))
-    st.session_state.chat_history.append(("🤖 Vedant", ai_reply))
-
-# Display chat history
+        ai_reply = get_ai_response(user_message) 
+        st.session_state.chat_history.append(("👤 You", user_message)) 
+        st.session_state.chat_history.append(("🤖 Vedant", ai_reply)) 
+# Display chat history 
 for role, msg in st.session_state.chat_history:
-    if role == "👤 You":
-        st.markdown(f"<div class='user-bubble'><b>{role}:</b> {msg}</div>", unsafe_allow_html=True)
-    else:
-        st.markdown(f"<div class='bot-bubble'><b>{role}:</b> {msg}</div>", unsafe_allow_html=True)
-
-# Clear chat
+    bubble_class = "user-bubble" if role == "👤 You" else "bot-bubble" 
+    st.markdown(f"<div class='{bubble_class}'><b>{role}:</b> {msg}</div>", unsafe_allow_html=True) 
+    # Clear chat 
 if st.button("🧹 Clear Chat"):
-    st.session_state.chat_history = [("🤖 Vedant", "Hello! 👋 How can I help you today?")]
-    st.success("Chat cleared!")
+   st.session_state.chat_history = [("🤖 Vedant", "Hello! 👋 How can I help you today?")]
+   st.success("Chat cleared!")

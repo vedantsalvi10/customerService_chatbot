@@ -1,19 +1,15 @@
-# ====================================================
-# 🤖 Food Customer Service Chatbot (OpenAI v1 SDK + Streamlit + Tool Calling)
-# ====================================================
 
 import os
 import streamlit as st
 import json
+import re
 from dotenv import load_dotenv
 from exa_py import Exa
-from openai import OpenAI  # New v1 SDK client
+from openai import OpenAI 
 
+
+# setting the api keys
 load_dotenv()
-
-# ====================================================
-# 🔐 OpenAI & EXA Setup
-# ====================================================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EXA_API_KEY = os.getenv("EXA_API_KEY")
 
@@ -27,75 +23,101 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # Initialize EXA client
 exa = Exa(api_key=EXA_API_KEY)
 
-# ====================================================
-# 🛠 Tool definition for function calling
-# ====================================================
-TOOLS = [
-    {
-        "name": "search_recipes",
-        "description": "Search the web for top recipes or food recommendations using Exa search.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "The search query to perform"},
-                "num_results": {"type": "integer", "description": "Number of results to return", "default": 5},
-            },
-            "required": ["query"],
-        },
-    }
-]
+# system prompt
+prompt = """
+You are an AI chef assistant that follows the ReAct (Reason + Act) framework *strictly*.
 
-# ====================================================
-# 🧠 EXA search function
-# ====================================================
+Your reasoning loop ALWAYS follows this exact order, and you must produce **at least 4 reasoning-action-observation steps** before giving your final answer, unless explicitly told to stop.
+
+Follow this structure exactly:
+
+Thought: <your reasoning about what to do next>
+Action: <tool_name>: <input>   (only if you need to use a tool)
+Observation: (will be provided later)
+Thought: <your reasoning after seeing the observation>
+Action: <next tool or plan>
+Observation: ...
+(continue this loop for at least 4 total Thought/Action/Observation cycles)
+Final Answer: <your final answer to the user, using all reasoning so far>
+
+Rules:
+- Use the tool only when needed.
+- Never skip the "Thought", "Action", or "Observation" labels.
+- Do NOT write the Final Answer until you have reasoned for at least 4 steps.
+- Always refine your reasoning from the previous observations.
+
+Available Tool:
+- search_recipes: Search for relevant recipes or cooking details given a user's query.
+
+Be clear, structured, and polite in your Final Answer.
+"""
+
+# exa function
 def search_recipes_tool(query, num_results = 5):
     results = exa.search_and_contents(query, num_results=num_results,highlights=True)
     return [{"title": r.title, "url": r.url, "content": r.highlights} for r in results.results]
 
-# ====================================================
-# 🧠 AI response with function calling
-# ====================================================
-def get_ai_response(user_message):
-    if not user_message.strip():
-        return "Please type a message so I can help you."
+# Tool defination for function calling
+tools = {
+    "search_recipes":search_recipes_tool
+}
+# setting up the bot
+class Agent:
+    def __init__(self,system=""):
+        self.system = system
+        self.messages = []
+        if self.system:
+            self.messages.append({"role":"system","content":system})
+    def __call__(self,message):
+        self.messages.append({"role": "user", "content": message})
+        result = self.execute()
+        self.messages.append({"role": "assistant", "content": result})
+        return result
+    def execute(self):
+        completion = client.chat.completions.create(
+                        model="gpt-4o", 
+                        temperature=0,
+                        messages=self.messages)
+        return completion.choices[0].message.content
 
-    # Build conversation history
-    messages = [
-        {"role": "system", "content": "You are a polite AI helping users with recipes and cooking questions."}
-    ]
-    if "chat_history" in st.session_state:
-        for role, msg in st.session_state.chat_history:
-            messages.append({"role": "user" if role=="👤 You" else "assistant", "content": msg})
-    messages.append({"role": "user", "content": user_message})
-
-    # Call OpenAI Chat API using new client
-    response = client.chat.completions.create(
-        model="gpt-4-0613",
-        messages=messages,
-        functions=TOOLS,
-        function_call="auto",
-        temperature=0.7,
-    )
-
-    message = response.choices[0].message
-
-    # Handle tool call
-    if message.function_call:
-        func_args = json.loads(message.function_call.arguments)
-        tool_results = search_recipes_tool(**func_args)
-        summary = "\n".join( [f"**{r['title']}**\n{r['content']}\n[{r['url']}]({r['url']})" for r in tool_results])
-        follow_up = client.chat.completions.create(
-            model="gpt-4-0613",
-            messages=[
-                {"role": "system", "content": "Summarize search results for the user politely."},
-                {"role": "user", "content": f"User asked: {user_message}\nHere are the results:\n{summary}"}
-            ],
-            temperature=0.7,
-        )
-        return follow_up.choices[0].message.content
-
-    return message.content or "Sorry, I couldn't generate a response."
-
+# creating reAct loop for the query
+action_re = re.compile('^Action: (\w+): (.*)$')
+def query(question,maxturns=5):
+    if "agent" not in st.session_state:
+        st.session_state.agent = Agent(prompt)
+    bot = st.session_state.agent
+    next_prompt = question
+    trace_log = []
+    for i in range(maxturns):
+        result = bot(next_prompt)
+        content = result["content"] if isinstance(result, dict) else result
+        lines = content.split("\n")
+        thought = None
+        for line in lines:
+            if line.startswith("Thought:"):
+                thought = line.replace("Thought:", "").strip()
+                trace_log.append({"type": "thought", "text": thought})
+                
+        actions = [
+            action_re.match(a)
+            for a in content.split('\n')
+            if action_re.match(a)
+        ]
+        if actions:
+            action,action_input = actions[0].groups()
+            trace_log.append({"type": "action", "text": f"{action}: {action_input}"})
+            if action not in tools:
+                raise Exception("Unknown action: {}: {}".format(action, action_input))
+            st.sidebar.write(f"🧠 Debug: calling {action} with input -> {action_input}")
+            observation = tools[action](action_input)
+            trace_log.append({"type": "observation", "text": observation})
+            next_prompt = "Observation: {}".format(observation)
+        else:
+            if "Final Answer:" in result:
+                final_output = result.split("Final Answer:")[-1].strip()
+                return final_output,trace_log
+            else:
+                return content, trace_log
 # ====================================================
 # 💬 Streamlit Chat UI
 # ====================================================
@@ -112,16 +134,34 @@ st.title("💬 Food Customer Service Bot")
 st.caption("Ask about cooking doubts, accounts, or diet!") 
 if "chat_history" not in st.session_state: 
       st.session_state.chat_history = [("🤖 Vedant", "Hello! 👋 How can I help you today?")] 
+
+if "trace_log" not in st.session_state:
+    st.session_state.trace_log = [] 
+    
 user_message = st.chat_input("Type your question here...") 
 if user_message:
-        ai_reply = get_ai_response(user_message) 
-        st.session_state.chat_history.append(("👤 You", user_message)) 
-        st.session_state.chat_history.append(("🤖 Vedant", ai_reply)) 
+    ai_reply, trace_log = query(user_message)
+    st.session_state.trace_log = trace_log 
+    st.session_state.chat_history.append(("👤 You", user_message))
+    st.session_state.chat_history.append(("🤖 Vedant", ai_reply))
 # Display chat history 
 for role, msg in st.session_state.chat_history:
     bubble_class = "user-bubble" if role == "👤 You" else "bot-bubble" 
     st.markdown(f"<div class='{bubble_class}'><b>{role}:</b> {msg}</div>", unsafe_allow_html=True) 
-    # Clear chat 
-if st.button("🧹 Clear Chat"):
-   st.session_state.chat_history = [("🤖 Vedant", "Hello! 👋 How can I help you today?")]
-   st.success("Chat cleared!")
+
+# side bar
+st.sidebar.title("🧩 ReAct Trace Log")
+st.sidebar.caption("See the reasoning and actions behind each AI response")
+
+# Display logs
+if st.session_state.trace_log:
+    for step in st.session_state.trace_log:
+        if step["type"] == "thought":
+            st.sidebar.markdown(f"💭 **Thought:** {step['text']}")
+        elif step["type"] == "action":
+            st.sidebar.markdown(f"⚙️ **Action:** `{step['text']}`")
+        elif step["type"] == "observation":
+            st.sidebar.markdown(f"👁️ **Observation:** {step['text']}")
+        st.sidebar.markdown("---")
+else:
+    st.sidebar.info("No trace log yet — ask a question to see the reasoning flow.")
